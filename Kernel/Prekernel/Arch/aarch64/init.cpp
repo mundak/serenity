@@ -7,9 +7,11 @@
 
 #include <AK/Types.h>
 #include <Kernel/Prekernel/Arch/aarch64/Aarch64_asm_utils.h>
+#include <Kernel/Prekernel/Arch/aarch64/Framebuffer.h>
 #include <Kernel/Prekernel/Arch/aarch64/Mailbox.h>
 #include <Kernel/Prekernel/Arch/aarch64/Timer.h>
 #include <Kernel/Prekernel/Arch/aarch64/UART.h>
+#include <Kernel/Prekernel/Arch/aarch64/Utils.h>
 
 extern "C" [[noreturn]] void halt();
 extern "C" [[noreturn]] void init();
@@ -19,6 +21,7 @@ static void set_up_el1_mode();
 static void set_up_el2_mode();
 static void set_up_el3_mode();
 static void print_current_exception_level(const char* msg);
+static void draw_logo();
 [[noreturn]] static void jump_to_os_start_from_el2();
 [[noreturn]] static void jump_to_os_start_from_el3();
 
@@ -50,7 +53,7 @@ extern "C" [[noreturn]] void init()
         jump_to_os_start_from_el3();
         break;
     default:
-        uart.print_str("FATAL: CPU booted in unsupported exception mode!\r\n");
+        Prekernel::warnln("FATAL: CPU booted in unsupported exception mode!");
         halt();
     }
 }
@@ -60,6 +63,8 @@ extern "C" [[noreturn]] void os_start()
     auto& uart = Prekernel::UART::the();
 
     print_current_exception_level("CPU switched to:");
+
+    draw_logo();
 
     auto& timer = Prekernel::Timer::the();
     u64 start_musec = 0;
@@ -211,4 +216,44 @@ static void print_current_exception_level(const char* msg)
     uart.print_str(" EL");
     uart.print_num(exception_level);
     uart.print_str("\r\n");
+}
+
+namespace LogoImage {
+#include "SerenityLogoRGB.inc"
+}
+
+static void draw_logo()
+{
+    auto& framebuffer = Prekernel::Framebuffer::the();
+
+    if (!framebuffer.initialized()) {
+        return;
+    }
+
+    auto fb_ptr = framebuffer.buffer();
+    char pixel[4];
+
+    auto image_left = (framebuffer.width() - LogoImage::width) / 2;
+    auto image_right = image_left + LogoImage::width;
+    auto image_top = (framebuffer.height() - LogoImage::height) / 2;
+    auto image_bottom = image_top + LogoImage::height;
+
+    for (u32 y = 0; y < framebuffer.height(); y++) {
+        for (u32 x = 0; x < framebuffer.width(); x++) {
+
+            if (x >= image_left && x < image_right && y >= image_top && y < image_bottom) {
+                HEADER_PIXEL(LogoImage::header_data, pixel);
+                *((unsigned int*)fb_ptr) = *((unsigned int*)&pixel);
+            } else {
+
+                fb_ptr[0] = 0xBD;
+                fb_ptr[1] = 0xBD;
+                fb_ptr[2] = 0xBD;
+                fb_ptr[3] = 0xFF;
+            }
+
+            fb_ptr += 4;
+        }
+        fb_ptr += framebuffer.pitch() - framebuffer.width() * 4;
+    }
 }
