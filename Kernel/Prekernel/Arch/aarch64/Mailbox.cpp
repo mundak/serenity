@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Assertions.h>
 #include <Kernel/Prekernel/Arch/aarch64/MMIO.h>
 #include <Kernel/Prekernel/Arch/aarch64/Mailbox.h>
+#include <Kernel/Prekernel/Arch/aarch64/Utils.h>
 
 namespace Prekernel {
 
@@ -32,6 +34,39 @@ constexpr u32 MBOX_FULL = 0x8000'0000;
 constexpr u32 MBOX_EMPTY = 0x4000'0000;
 
 constexpr int ARM_TO_VIDEOCORE_CHANNEL = 8;
+
+constexpr u32 MBOX_TAG_GET_FIRMWARE_VERSION = 0x0000'0001;
+constexpr u32 MBOX_TAG_SET_CLOCK_RATE = 0x0003'8002;
+
+// Framebuffer operations
+constexpr u32 MBOX_TAG_ALLOCATE_BUFFER = 0x40001;
+constexpr u32 MBOX_TAG_RELEASE_BUFFER = 0x48001;
+constexpr u32 MBOX_TAG_BLANK_SCREEN = 0x40002;
+constexpr u32 MBOX_TAG_GET_PHYSICAL_SIZE = 0x40003;
+constexpr u32 MBOX_TAG_TEST_PHYSICAL_SIZE = 0x44003;
+constexpr u32 MBOX_TAG_SET_PHYSICAL_SIZE = 0x48003;
+constexpr u32 MBOX_TAG_GET_VIRTUAL_SIZE = 0x40004;
+constexpr u32 MBOX_TAG_TEST_VIRTUAL_SIZE = 0x44004;
+constexpr u32 MBOX_TAG_SET_VIRTUAL_SIZE = 0x48004;
+constexpr u32 MBOX_TAG_GET_DEPTH = 0x40005;
+constexpr u32 MBOX_TAG_TEST_DEPTH = 0x44005;
+constexpr u32 MBOX_TAG_SET_DEPTH = 0x48005;
+constexpr u32 MBOX_TAG_GET_PIXEL_ORDER = 0x40006;
+constexpr u32 MBOX_TAG_TEST_PIXEL_ORDER = 0x44006;
+constexpr u32 MBOX_TAG_SET_PIXEL_ORDER = 0x48006;
+constexpr u32 MBOX_TAG_GET_ALPHA_MODE = 0x40007;
+constexpr u32 MBOX_TAG_TEST_ALPHA_MODE = 0x44007;
+constexpr u32 MBOX_TAG_SET_ALPHA_MODE = 0x48007;
+constexpr u32 MBOX_TAG_GET_PITCH = 0x40008;
+constexpr u32 MBOX_TAG_GET_VIRTUAL_OFFSET = 0x40009;
+constexpr u32 MBOX_TAG_TEST_VIRTUAL_OFFSET = 0x44009;
+constexpr u32 MBOX_TAG_SET_VIRTUAL_OFFSET = 0x48009;
+constexpr u32 MBOX_TAG_GET_OVERSCAN = 0x4000A;
+constexpr u32 MBOX_TAG_TEST_OVERSCAN = 0x4400A;
+constexpr u32 MBOX_TAG_SET_OVERSCAN = 0x4800A;
+constexpr u32 MBOX_TAG_GET_PALETTE = 0x4000B;
+constexpr u32 MBOX_TAG_TEST_PALETTE = 0x4400B;
+constexpr u32 MBOX_TAG_SET_PALETTE = 0x4800B;
 
 static void wait_until_we_can_write(MMIO& mmio)
 {
@@ -74,9 +109,6 @@ bool Mailbox::call(u8 channel, u32 volatile* __attribute__((aligned(16))) messag
     return true;
 }
 
-constexpr u32 MBOX_TAG_GET_FIRMWARE_VERSION = 0x0000'0001;
-constexpr u32 MBOX_TAG_SET_CLOCK_RATE = 0x0003'8002;
-
 u32 Mailbox::query_firmware_version()
 {
     // See https://github.com/raspberrypi/firmware/wiki/Mailbox-property-interface for data format.
@@ -116,4 +148,114 @@ u32 Mailbox::set_clock_rate(ClockID clock_id, u32 rate_hz, bool skip_setting_tur
     return message[6];
 }
 
+bool Mailbox::init_framebuffer(u16 width, u16 height, u8 depth, u8** buffer_ptr, u32* size, u32* pitch)
+{
+    VERIFY(width > 0);
+    VERIFY(height > 0);
+    VERIFY(depth > 0);
+    VERIFY(buffer_ptr != nullptr);
+    VERIFY(size != nullptr);
+    VERIFY(pitch != nullptr);
+
+    const u32 offset_x = 0;
+    const u32 offset_y = 0;
+    const u32 pixel_mode = 1 /* RGB */;
+    const u32 buffer_alignment = 4096;
+
+    u32 __attribute__((aligned(16))) message[36];
+    message[0] = sizeof(message);
+    message[1] = MBOX_REQUEST;
+
+    message[2] = MBOX_TAG_SET_PHYSICAL_SIZE;
+    message[3] = 8;
+    message[4] = 8;
+    message[5] = width;
+    message[6] = height;
+
+    message[7] = MBOX_TAG_SET_VIRTUAL_SIZE;
+    message[8] = 8;
+    message[9] = 8;
+    message[10] = width;
+    message[11] = height;
+
+    message[12] = MBOX_TAG_SET_VIRTUAL_OFFSET;
+    message[13] = 8;
+    message[14] = 8;
+    message[15] = offset_x;
+    message[16] = offset_y;
+
+    message[17] = MBOX_TAG_SET_DEPTH;
+    message[18] = 4;
+    message[19] = 4;
+    message[20] = depth;
+
+    message[21] = MBOX_TAG_SET_PIXEL_ORDER;
+    message[22] = 4;
+    message[23] = 4;
+    message[24] = pixel_mode;
+
+    message[25] = MBOX_TAG_ALLOCATE_BUFFER;
+    message[26] = 8;
+    message[27] = 8;
+    message[28] = buffer_alignment;
+    message[29] = 0;
+
+    // FIXME: without this line QEMU freezes...
+    dbgln("QEMU HACK! sleep?");
+
+    message[30] = MBOX_TAG_GET_PITCH;
+    message[31] = 4;
+    message[32] = 4;
+    message[33] = 0;
+
+    message[34] = 0;
+
+    if (!call(ARM_TO_VIDEOCORE_CHANNEL, message)) {
+        warnln("Mailbox::init_framebuffer(): Mailbox send failed.");
+        return false;
+    }
+
+    if (message[5] != width || message[6] != height) {
+        warnln("Mailbox::init_framebuffer(): Setting physical dimension failed.");
+        return false;
+    }
+
+    if (message[10] != width || message[11] != height) {
+        warnln("Mailbox::init_framebuffer(): Setting virtual dimension failed.");
+        return false;
+    }
+
+    if (message[15] != offset_x || message[16] != offset_y) {
+        warnln("Mailbox::init_framebuffer(): Setting virtual offset failed.");
+        return false;
+    }
+
+    if (message[20] != depth) {
+        warnln("Mailbox::init_framebuffer(): Setting depth failed.");
+        return false;
+    }
+
+    if (message[24] != pixel_mode) {
+        warnln("Mailbox::init_framebuffer(): Setting pixel mode failed.");
+        return false;
+    }
+
+    if (message[28] == 0 || message[29] == 0) {
+        warnln("Mailbox::init_framebuffer(): Allocating buffer failed.");
+        return false;
+    }
+
+    if (message[33] == 0) {
+        warnln("Mailbox::init_framebuffer(): Retrieving pitch failed.");
+        return false;
+    }
+
+    // Convert GPU address space to RAM
+    *buffer_ptr = reinterpret_cast<u8*>(message[28] & 0x3FFFFFFF);
+
+    *size = message[29];
+    *pitch = message[33];
+
+    return true;
+}
 }

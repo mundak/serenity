@@ -36,6 +36,7 @@ public:
         PIXEL_BVB = 14,
     };
     static u32 set_clock_rate(ClockID, u32 rate_hz, bool skip_setting_turbo = true);
+    static bool init_framebuffer(u16 width, u16 height, u8 depth, u8** buffer_ptr, u32* size, u32* pitch);
 };
 
 }
